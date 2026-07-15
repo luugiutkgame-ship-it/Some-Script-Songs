@@ -1,6 +1,3 @@
--- Emperean ReAnimate - cleaned edition
--- Sections are separated for easier maintenance.
-
 function Reanimate()
 local OptionsAccessories = nil
 local OptionsRigTransparency = nil
