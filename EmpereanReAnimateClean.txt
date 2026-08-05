@@ -715,7 +715,6 @@ local Emperean = {
 		LastTime = osclock()
 
 		Rig = OptionsRigR15 and CreateHumanoidModelFromUserId(Players, 5532894300) or CreateHumanoidModelFromUserId(Players, 5532891747)
-		Rig.Name = "non"
 		RigHumanoid = Rig.Humanoid
 		RigHumanoidRootPart = Rig.HumanoidRootPart
 		Rig.Parent = Workspace
