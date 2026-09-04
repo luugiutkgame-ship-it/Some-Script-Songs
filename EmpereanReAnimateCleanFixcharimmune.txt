@@ -1,6 +1,6 @@
 function Reanimate()
 	--====================================================
-	-- ANTI-DOUBLE EXECUTION
+	-- ANTI-DOUBLE EXECUTION & SERVICE CLONING
 	--====================================================
 	local genv = (getgenv and getgenv()) or _G
 	if genv._EMP_REANIMATE_RUNNING then
@@ -9,8 +9,16 @@ function Reanimate()
 	end
 	genv._EMP_REANIMATE_RUNNING = true
 
+	local function SafeGetService(serviceName)
+		local success, service = pcall(function() return game:GetService(serviceName) end)
+		if success and service then
+			return (cloneref and cloneref(service)) or service
+		end
+		return nil
+	end
+
 	local OptionsAccessories = nil
-	local OptionsRigTransparency = nil
+	local OptionsRigTransparency = 1
 	local OptionsRigR15 = nil
 	local OptionsRigSetHumanoidDescription = nil
 	local OptionsRigSetCharacter = nil
@@ -23,6 +31,7 @@ function Reanimate()
 	local OptionsFlingTimeout = nil
 	local OptionsFlingVelocity = nil
 	local OptionsFlingHighlightTargets = nil
+	local OptionsAutoFix = true
 
 	local BindableEvent = nil
 	local Boolean = false
@@ -30,10 +39,11 @@ function Reanimate()
 	local Rig = nil
 	local RigHumanoid = nil
 	local RigHumanoidRootPart = nil
-	local Success = false
 	local Time = nil
 	local DeltaTime = nil
 	local LastTime = nil
+	local LastValidPosition = nil
+	local IsFixingChar = false
 
 	local Attachments = { }
 	local BaseParts = { }
@@ -68,76 +78,170 @@ function Reanimate()
 	local GetChildren = game.GetChildren
 	local GetDescendants = game.GetDescendants
 	local IsA = game.IsA
-	local Players = FindFirstChildOfClass(game, "Players")
-	local CreateHumanoidModelFromUserId = Players.CreateHumanoidModelFromUserId
-	local LocalPlayer = Players.LocalPlayer
+	
+	local Players = SafeGetService("Players")
+	local LocalPlayer = Players and Players.LocalPlayer
+	if not LocalPlayer then return end
+
 	local Mouse = LocalPlayer:GetMouse()
-	local RunService = FindFirstChildOfClass(game, "RunService")
+	local RunService = SafeGetService("RunService")
 	local PostSimulation = RunService.PostSimulation
 	local PreRender = RunService.PreRender
 	local PreSimulation = RunService.PreSimulation
 	local Connect = PostSimulation.Connect
+	
 	local function Disconnect(Connection)
-		if Connection then
-			Connection:Disconnect()
-		end
+		if Connection then Connection:Disconnect() end
 	end
+	
 	local Wait = PostSimulation.Wait
-	local StarterGui = FindFirstChildOfClass(game, "StarterGui")
-	local SetCore = StarterGui.SetCore
-	local UserInputService = FindFirstChildOfClass(game, "UserInputService")
-	local IsMouseButtonPressed = UserInputService.IsMouseButtonPressed
-	local Workspace = FindFirstChildOfClass(game, "Workspace")
-	local CurrentCamera = Workspace.CurrentCamera
+	local StarterGui = SafeGetService("StarterGui")
+	local UserInputService = SafeGetService("UserInputService")
+	local IsMouseButtonPressed = UserInputService and UserInputService.IsMouseButtonPressed
+	local Workspace = SafeGetService("Workspace")
+	local CurrentCamera = Workspace and Workspace.CurrentCamera
 
 	local Instancenew = Instance.new
-	local DummyHumanoid = Instancenew("Humanoid")
-	local ApplyDescription = DummyHumanoid.ApplyDescription
-	local ChangeState = DummyHumanoid.ChangeState
-	local GetAppliedDescription = DummyHumanoid.GetAppliedDescription
-	local Move = DummyHumanoid.Move
-	Destroy(DummyHumanoid)
-
-	local math = math
 	local mathabs = math.abs
 	local mathrandom = math.random
 	local mathsin = math.sin
-
-	local BrickColor = BrickColor
-	local BrickColornew = BrickColor.new
-
 	local osclock = os.clock
-
 	local pairs = pairs
 	local pcall = pcall
-
 	local script = script
-
-	local string = string
 	local stringfind = string.find
-
-	local table = table
 	local tableclear = table.clear
-	local tablefind = table.find
-	local tableinsert = table.insert
+	
+	local tablefind = (table and table.find) or function(tbl, val)
+		for i, v in pairs(tbl) do if v == val then return i end end
+		return nil
+	end
 
-	local task = task
+	local tableinsert = table.insert
 	local taskspawn = task.spawn
 	local taskwait = task.wait
-
-	local sethiddenproperty = sethiddenproperty or function() end
-
-	local type = type
 	local typeof = typeof
 
 	local Vector3 = Vector3
 	local Vector3new = Vector3.new
 	local Vector3zero = Vector3.zero
-
 	local CameraCFrame = CFrameidentity
 
+	local sethiddenproperty = sethiddenproperty or function() end
+
+	-- BẢO VỆ PHÒNG CHỐNG VOID TOÀN CỤC
+	pcall(function()
+		sethiddenproperty(Workspace, "FallenPartsDestroyHeight", -20000)
+		Workspace.FallenPartsDestroyHeight = -20000
+	end)
+
+	local Stop
+
 	--====================================================
-	-- REAL-TIME HUMANOID PROTECTOR (TỰ TẠO LẠI KHI BỊ XOÁ)
+	-- LẤY ĐIỂM HỒI SINH (SPAWNLOCATION) TRONG WORKSPACE
+	--====================================================
+	local function GetSpawnCFrame()
+		local spawnCandidates = {}
+		for _, v in pairs(GetDescendants(Workspace)) do
+			if IsA(v, "SpawnLocation") and v.Enabled then
+				tableinsert(spawnCandidates, v)
+			end
+		end
+
+		if #spawnCandidates > 0 then
+			local selectedSpawn = spawnCandidates[mathrandom(1, #spawnCandidates)]
+			return selectedSpawn.CFrame + Vector3new(0, 5, 0)
+		end
+
+		return CFramenew(0, 10, 0)
+	end
+
+	--====================================================
+	-- AUTO-FIX CHAR SYSTEM
+	--====================================================
+	local function TriggerAutoFix(reason)
+		if IsFixingChar or not OptionsAutoFix then return end
+		IsFixingChar = true
+		warn("[AUTO-FIX CHAR]: Phát hiện sự cố (" .. tostring(reason) .. ")! Đang phục hồi...")
+
+		if Stop then Stop() end
+		taskwait(0.2)
+		taskspawn(Reanimate)
+	end
+
+	--====================================================
+	-- HỆ THỐNG ÉP TÀNG HÌNH RIG MULTIPLIERGUY HOÀN TOÀN
+	--====================================================
+	local function ForceHideInstance(inst)
+		if IsA(inst, "BasePart") or IsA(inst, "Decal") or IsA(inst, "Texture") then
+			inst.Transparency = 1
+			inst.LocalTransparencyModifier = 1
+		elseif IsA(inst, "ParticleEmitter") or IsA(inst, "Fire") or IsA(inst, "Sparkles") or IsA(inst, "Light") then
+			inst.Enabled = false
+		elseif IsA(inst, "SelectionBox") or IsA(inst, "BoxHandleAdornment") then
+			inst.Visible = false
+		end
+	end
+
+	local function FullyHideRig(rigModel)
+		if not rigModel then return end
+		for _, item in pairs(GetDescendants(rigModel)) do
+			ForceHideInstance(item)
+		end
+	end
+
+	--====================================================
+	-- SAFE RIG CREATOR
+	--====================================================
+	local function SafeCreateRig(isR15)
+		local success, rigModel = pcall(function()
+			return Players:CreateHumanoidModelFromUserId(isR15 and 5532894300 or 5532891747)
+		end)
+
+		if success and rigModel then
+			return rigModel
+		end
+
+		local char = LocalPlayer.Character
+		if char then
+			char.Archivable = true
+			local rigClone = char:Clone()
+			char.Archivable = false
+
+			for _, item in pairs(rigClone:GetChildren()) do
+				if item:IsA("Accessory") or item:IsA("Script") or item:IsA("LocalScript") then
+					item:Destroy()
+				end
+			end
+
+			return rigClone
+		end
+		return nil
+	end
+
+	local function BreakJoints(Parent)
+		if not Parent then return end
+		for _, Instance in pairs(GetDescendants(Parent)) do
+			if IsA(Instance, "JointInstance") or IsA(Instance, "Constraint") then
+				Destroy(Instance)
+			end
+		end
+	end
+
+	local function HasJoint(Part0)
+		if not Part0 then return false end
+		for _, Instance in pairs(GetDescendants(Part0)) do
+			if IsA(Instance, "JointInstance") or IsA(Instance, "Constraint") then return true end
+		end
+		return false
+	end
+
+	local function IsValidPart(Part)
+		return Part and Part.Parent and Part:IsDescendantOf(Workspace)
+	end
+
+	--====================================================
+	-- REAL-TIME HUMANOID GUARD
 	--====================================================
 	local function AutoGuardHumanoid(CharModel, TargetType)
 		if not CharModel then return end
@@ -163,13 +267,14 @@ function Reanimate()
 		tableinsert(RBXScriptConnections, Connect(CharModel.ChildRemoved, function(child)
 			if child:IsA("Humanoid") or child.Name == "Humanoid" then
 				taskspawn(function()
-					taskwait()
+					taskwait(0.05)
 					if CharModel and CharModel.Parent then
 						local NewHum = EnsureHumanoid()
-						if TargetType == "LocalPlayer" then
-							Humanoid = NewHum
-						elseif TargetType == "Rig" then
-							RigHumanoid = NewHum
+						if TargetType == "LocalPlayer" then Humanoid = NewHum
+						elseif TargetType == "Rig" then RigHumanoid = NewHum end
+					else
+						if TargetType == "Rig" and OptionsAutoFix then
+							TriggerAutoFix("Rig Humanoid Bị Xóa Hoàn Toàn")
 						end
 					end
 				end)
@@ -178,278 +283,88 @@ function Reanimate()
 	end
 
 	--====================================================
-	-- FIX CHARACTER SYSTEM 
+	-- CAMERA CONTROL
 	--====================================================
-	local SavedCharacterClone = nil
-	local IsFixingInProgress = false
-
-	local function SaveCharacterOnce()
-		if SavedCharacterClone then return end
-		local Char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		if Char then
-			Char.Archivable = true
-			
-			local Hum = Char:FindFirstChildOfClass("Humanoid")
-			if not Hum then
-				Hum = Instancenew("Humanoid")
-				Hum.Name = "Humanoid"
-				Hum.Parent = Char
-			end
-
-			SavedCharacterClone = Clone(Char)
-			
-			for _, v in pairs(GetDescendants(SavedCharacterClone)) do
-				if IsA(v, "LuaSourceContainer") then
-					Destroy(v)
-				end
-			end
-			SavedCharacterClone.Parent = nil
-		end
-	end
-
-	local function BreakJoints(Parent)
-		for _, Instance in pairs(GetDescendants(Parent)) do
-			if IsA(Instance, "JointInstance") or IsA(Instance, "Constraint") then
-				Destroy(Instance)
-			end
-		end
-	end
-
-	local function ExecuteFixChar()
-		if IsFixingInProgress then return end
-		IsFixingInProgress = true
-
-		pcall(function()
-			if Stop then Stop() end
-		end)
-		genv._EMP_REANIMATE_RUNNING = nil
-
-		local CurrentChar = LocalPlayer.Character
-		if CurrentChar then
-			BreakJoints(CurrentChar)
-			pcall(function() Destroy(CurrentChar) end)
-		end
-
-		taskwait(0.1)
-
-		if Workspace.CurrentCamera then
-			Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-		end
-
-		local RestoredSuccessfully = false
-
-		if SavedCharacterClone then
-			local SuccessClone, NewChar = pcall(function() return Clone(SavedCharacterClone) end)
-			
-			if SuccessClone and NewChar then
-				local NewHum = NewChar:FindFirstChildOfClass("Humanoid")
-				if not NewHum then
-					NewHum = Instancenew("Humanoid")
-					NewHum.Name = "Humanoid"
-					NewHum.Parent = NewChar
-				end
-
-				NewHum.Health = NewHum.MaxHealth
-				NewChar.Parent = Workspace
-				LocalPlayer.Character = NewChar
-
-				if Workspace.CurrentCamera then
-					Workspace.CurrentCamera.CameraSubject = NewHum
-				end
-				
-				RestoredSuccessfully = true
-			end
-		end
-
-		if not RestoredSuccessfully then
-			pcall(function() LocalPlayer:LoadCharacter() end)
-		end
-
-		taskwait(0.3)
-		IsFixingInProgress = false
-	end
-
-	local function CreateFixCharUI()
-		local TargetParent = (gethui and gethui()) or game:GetService("CoreGui") or LocalPlayer:FindFirstChildOfClass("PlayerGui")
-		
-		local ScreenGui = TargetParent:FindFirstChild("FixCharScreenGui")
-		if not ScreenGui then
-			ScreenGui = Instancenew("ScreenGui")
-			ScreenGui.Name = "FixCharScreenGui"
-			ScreenGui.ResetOnSpawn = false
-			ScreenGui.Parent = TargetParent
-		end
-
-		local Button = ScreenGui:FindFirstChild("FixCharButton")
-		if not Button then
-			Button = Instancenew("TextButton")
-			Button.Name = "FixCharButton"
-			Button.Size = UDim2.new(0, 130, 0, 38)
-			Button.Position = UDim2.new(0.02, 0, 0.45, 0)
-			Button.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-			Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-			Button.Text = "🔧 Fix Character"
-			Button.Font = Enum.Font.SourceSansBold
-			Button.TextSize = 14
-			Button.Active = false
-			Button.Draggable = false
-			Button.Parent = ScreenGui
-
-			local UICorner = Instancenew("UICorner")
-			UICorner.CornerRadius = UDim.new(0, 6)
-			UICorner.Parent = Button
-		end
-
-		SaveCharacterOnce()
-
-		Button.MouseButton1Click:Connect(function()
-			Button.Text = "⏳ Fixing..."
-			Button.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
-			
-			ExecuteFixChar()
-
-			taskwait(0.5)
-			if Button and Button.Parent then
-				Button.Text = "🔧 Fix Character"
-				Button.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-			end
-		end)
-	end
-
-	--====================================================
-	-- Utilities
-	--====================================================
-
-	local function HasJoint(Part0)
-		if not Part0 then
-			return false
-		end
-
-		for _, Instance in pairs(GetDescendants(Part0)) do
-			if IsA(Instance, "JointInstance") or IsA(Instance, "Constraint") then
-				return true
-			end
-		end
-
-		return false
-	end
-
-	local function IsValidPart(Part)
-		return Part
-		and Part.Parent
-		and Part:IsDescendantOf(Workspace)
-	end
-
-	--====================================================
-	-- Camera
-	--====================================================
-
 	local function CameraSubject()
-		if RigHumanoid and RigHumanoid.Parent then
-			CurrentCamera.CameraSubject = RigHumanoid
-		end
+		if RigHumanoid and RigHumanoid.Parent then CurrentCamera.CameraSubject = RigHumanoid end
 		Wait(PreRender)
 		CurrentCamera.CFrame = CameraCFrame
 	end
 
 	local function CameraType()
-		if CurrentCamera.CameraType ~= Track then
-			CurrentCamera.CameraType = Track
-		end
+		if CurrentCamera.CameraType ~= Track then CurrentCamera.CameraType = Track end
 	end
 
 	local function Camera()
-		local Camera = Workspace.CurrentCamera
-
-		if Camera then
-			CameraCFrame = Camera.CFrame
-			CurrentCamera = Camera
-
+		local Cam = Workspace.CurrentCamera
+		if Cam then
+			CameraCFrame = Cam.CFrame
+			CurrentCamera = Cam
 			CameraSubject()
 			CameraType()
-
-			tableinsert(RBXScriptConnections, Connect(GetPropertyChangedSignal(Camera, "CameraSubject"), CameraSubject))
-			tableinsert(RBXScriptConnections, Connect(GetPropertyChangedSignal(Camera, "CameraType"), CameraType))
+			tableinsert(RBXScriptConnections, Connect(GetPropertyChangedSignal(Cam, "CameraSubject"), CameraSubject))
+			tableinsert(RBXScriptConnections, Connect(GetPropertyChangedSignal(Cam, "CameraType"), CameraType))
 		end
 	end
 
 	local function FindFirstChildOfClassAndName(Parent, ClassName, Name)
-		for Index, Instance in pairs(GetChildren(Parent)) do
-			if IsA(Instance, ClassName) and Instance.Name == Name then
-				return Instance
-			end
+		if not Parent then return nil end
+		for _, Instance in pairs(GetChildren(Parent)) do
+			if IsA(Instance, ClassName) and Instance.Name == Name then return Instance end
 		end
 	end
 
-	local function WaitForChildOfClassAndName(Parent, ...)
-		local Instance = FindFirstChildOfClassAndName(Parent, ...)
-
-		while not Instance and typeof(Parent) == "Instance" do
-			Instance = FindFirstChildOfClassAndName(Parent, ...)
-			Wait(Parent.ChildAdded)
+	local function WaitForChildOfClassAndName(Parent, ClassName, Name, Timeout)
+		Timeout = Timeout or 2
+		local StartTime = osclock()
+		local Instance = FindFirstChildOfClassAndName(Parent, ClassName, Name)
+		while not Instance and typeof(Parent) == "Instance" and (osclock() - StartTime) < Timeout do
+			Instance = FindFirstChildOfClassAndName(Parent, ClassName, Name)
+			taskwait(0.05)
 		end
-
 		return Instance
 	end
 
 	local function Invisible(Instance)
-		if IsA(Instance, "BasePart") or IsA(Instance, "Decal") then
-			Instance.Transparency = OptionsRigTransparency
-		elseif IsA(Instance, "ForceField") or IsA(Instance, "Explosion") then
-			Instance.Visible = false
-		elseif IsA(Instance, "ParticleEmitter") or IsA(Instance, "Fire") or IsA(Instance, "Sparkles") then
-			Instance.Enabled = false
-		end
+		ForceHideInstance(Instance)
 	end
 
 	local function DescendantAdded(Instance)
 		if IsA(Instance, "Attachment") then
 			local Handle = Instance.Parent
-
 			if IsA(Handle, "BasePart") then
 				local AttachmentsAttachment = Attachments[Instance.Name]
-
 				if AttachmentsAttachment then
-					local MeshId = ""
-					local TextureId = ""
-
+					local MeshId, TextureId = "", ""
 					if IsA(Handle, "MeshPart") then
-						MeshId = Handle.MeshId
-						TextureId = Handle.TextureID
+						MeshId, TextureId = Handle.MeshId, Handle.TextureID
 					else
 						local SpecialMesh = FindFirstChildOfClass(Handle, "SpecialMesh")
-
-						if SpecialMesh then
-							MeshId = SpecialMesh.MeshId
-							TextureId = SpecialMesh.TextureId
-						end
+						if SpecialMesh then MeshId, TextureId = SpecialMesh.MeshId, SpecialMesh.TextureId end
 					end
 
-					for Index, Table in pairs(OptionsAccessories) do
+					for _, Table in pairs(OptionsAccessories) do
 						if stringfind(MeshId, Table.MeshId or "") and stringfind(TextureId, Table.TextureId or "") then
-							local Instance = FindFirstChildOfClassAndName(Rig, "BasePart", Table.Name)
-
+							local TargetPart = FindFirstChildOfClassAndName(Rig, "BasePart", Table.Name)
 							local AlternativeName = Table.AlternativeName
 							local AlternativeInstance = false
 
-							if not Instance and AlternativeName then
-								Instance = FindFirstChildOfClassAndName(Rig, "BasePart", AlternativeName)
+							if not TargetPart and AlternativeName then
+								TargetPart = FindFirstChildOfClassAndName(Rig, "BasePart", AlternativeName)
 								AlternativeInstance = true
 							end
 
-							if Instance and not tablefind(Blacklist, Instance) then
-								if Table.Blacklist then
-									tableinsert(Blacklist, Instance)
-								end
+							if TargetPart and not tablefind(Blacklist, TargetPart) then
+								if Table.Blacklist then tableinsert(Blacklist, TargetPart) end
 								BreakJoints(Handle)
-								tableinsert(Tables, { Part0 = Handle, Part1 = Instance, CFrame = AlternativeInstance and Table.AllowAlternativeCFrame and Table.AlternativeCFrame or Table.CoordinateFrame, LastPosition = Instance.Position })
+								tableinsert(Tables, { Part0 = Handle, Part1 = TargetPart, CFrame = AlternativeInstance and Table.AllowAlternativeCFrame and Table.AlternativeCFrame or Table.CoordinateFrame, LastPosition = TargetPart.Position })
 								return
 							end
 						end
 					end
-					for Index, Table in pairs(RigAccessories) do
-						local TableHandle = Table.Handle
 
+					for _, Table in pairs(RigAccessories) do
+						local TableHandle = Table.Handle
 						if typeof(TableHandle) == "Instance" and Table.MeshId == MeshId and Table.TextureId == TextureId then
 							BreakJoints(Handle)
 							tableinsert(Tables, { Part0 = Handle, Part1 = TableHandle, LastPosition = TableHandle.Position })
@@ -458,11 +373,9 @@ function Reanimate()
 					end
 
 					local Accessory = Handle.Parent
-
 					if IsA(Accessory, "Accessory") then
 						local AccessoryClone = Instancenew("Accessory")
 						AccessoryClone.Name = Accessory.Name
-
 						local HandleClone = Clone(Handle)
 						Invisible(HandleClone)
 						BreakJoints(HandleClone)
@@ -478,7 +391,6 @@ function Reanimate()
 
 						tableinsert(RigAccessories, { Handle = HandleClone, MeshId = MeshId, TextureId = TextureId })
 						tableinsert(Tables, { Part0 = Handle, Part1 = HandleClone, LastPosition = HandleClone.Position })
-
 						AccessoryClone.Parent = Rig
 					end
 				end
@@ -489,45 +401,69 @@ function Reanimate()
 		end
 	end
 
-	--====================================================
-	-- Character and accessory handling
-	--====================================================
-
-	local function ApplyDescriptionRig()
-		if not Humanoid or not Humanoid.Parent or not RigHumanoid or not RigHumanoid.Parent then return end
-		local Description = GetAppliedDescription(Humanoid)
-		Description.HatAccessory = ""
-		Description.BackAccessory = ""
-		Description.FaceAccessory = ""
-		Description.HairAccessory = ""
-		Description.NeckAccessory = ""
-		Description.FrontAccessory = ""
-		Description.WaistAccessory = ""
-		Description.ShouldersAccessory = ""
-		ApplyDescription(RigHumanoid, Description)
-
-		for Index, Instance in pairs(GetDescendants(Rig)) do
-			Invisible(Instance)
+	local function SafeDisableScript(Instance)
+		if not Instance or Instance == script then return end
+		if IsA(Instance, "LocalScript") or IsA(Instance, "Script") then
+			local Char = LocalPlayer.Character
+			if Char and Instance:IsDescendantOf(Char) then
+				pcall(function()
+					Enableds[Instance] = Instance.Enabled
+					Instance.Enabled = false
+				end)
+			end
+		elseif OptionsDisableScreenGUIs and IsA(Instance, "ScreenGui") then
+			pcall(function()
+				Enableds[Instance] = Instance.Enabled
+				Instance.Enabled = false
+			end)
 		end
 	end
 
+	local function gameDescendantAdded(Instance)
+		if OptionsDisableScripts or OptionsDisableScreenGUIs then
+			SafeDisableScript(Instance)
+		end
+	end
+
+	local function ApplyDescriptionRig()
+		if not Humanoid or not Humanoid.Parent or not RigHumanoid or not RigHumanoid.Parent then return end
+		pcall(function()
+			local Description = RigHumanoid:GetAppliedDescription()
+			Description.HatAccessory = ""
+			Description.BackAccessory = ""
+			Description.FaceAccessory = ""
+			Description.HairAccessory = ""
+			Description.NeckAccessory = ""
+			Description.FrontAccessory = ""
+			Description.WaistAccessory = ""
+			Description.ShouldersAccessory = ""
+			RigHumanoid:ApplyDescription(Description)
+		end)
+
+		for _, Instance in pairs(GetDescendants(Rig)) do Invisible(Instance) end
+	end
+
 	local function SetCharacter()
-		taskwait()
+		taskwait(0.1)
 		LocalPlayer.Character = Rig
 	end
 
 	local Tools = {}
 	local function CharacterAdded()
 		local Character = LocalPlayer.Character
-
 		if Character and Character ~= Rig then
-			-- BẢO VỆ HUMANOID CỦA KHUNG NHÂN VẬT THẬT
 			AutoGuardHumanoid(Character, "LocalPlayer")
 
+			if OptionsDisableScripts then
+				for _, child in pairs(GetDescendants(Character)) do
+					SafeDisableScript(child)
+				end
+			end
+
 			if OptionsFlingToolFling then
-				for Index, Backpack in pairs(GetChildren(LocalPlayer)) do
+				for _, Backpack in pairs(GetChildren(LocalPlayer)) do
 					if IsA(Backpack, "Backpack") then
-						for Index, Instance in pairs(GetChildren(Backpack)) do
+						for _, Instance in pairs(GetChildren(Backpack)) do
 							if IsA(Instance, "Tool") then
 								Tools[Instance] = FindFirstChildOfClassAndName(Instance, "BasePart", "Handle")	
 								Instance.Parent = Character
@@ -536,138 +472,129 @@ function Reanimate()
 					end
 				end
 			end
-			
-			if OptionsRigSetCharacter then
-				taskspawn(SetCharacter)
-			end
-			
+
+			if OptionsRigSetCharacter then taskspawn(SetCharacter) end
+
 			tableclear(BaseParts)
 			tableclear(Blacklist)
 			tableclear(Tables)
 
-			if CurrentCamera then
-				CameraCFrame = CurrentCamera.CFrame
-			end
-
-			for Index, Instance in pairs(GetDescendants(Character)) do
-				DescendantAdded(Instance)
-			end
-
+			if CurrentCamera then CameraCFrame = CurrentCamera.CFrame end
+			for _, Instance in pairs(GetDescendants(Character)) do DescendantAdded(Instance) end
 			tableinsert(RBXScriptConnections, Connect(Character.DescendantAdded, DescendantAdded))
 
-			local HumanoidRootPart = WaitForChildOfClassAndName(Character, "BasePart", "HumanoidRootPart")
+			local HumanoidRootPart = WaitForChildOfClassAndName(Character, "BasePart", "HumanoidRootPart", 2)
 
 			if Boolean then
 				Camera()
-
-				if HumanoidRootPart then
-					RigHumanoidRootPart.CFrame = HumanoidRootPart.CFrame
+				if HumanoidRootPart and RigHumanoidRootPart then
+					if HumanoidRootPart.Position.Y > 0 and HumanoidRootPart.Position.Y < 50000 then
+						RigHumanoidRootPart.CFrame = HumanoidRootPart.CFrame
+					else
+						-- NẾU BỊ VOID KHI SPAWN, DÙNG SPAWNLOCATION
+						RigHumanoidRootPart.CFrame = GetSpawnCFrame()
+					end
 					Boolean = false
 				end
 
-				if OptionsRigSetHumanoidDescription then
-					pcall(ApplyDescriptionRig)
-				end
+				if OptionsRigSetHumanoidDescription then pcall(ApplyDescriptionRig) end
 			end
 
 			if HumanoidRootPart then
 				for Index, Table in pairs(Targets) do
-					if not HumanoidRootPart then
-						break
-					end
-
-					if Humanoid and Humanoid.Parent then
-						pcall(function() ChangeState(Humanoid, Physics) end)
-					end
+					if not HumanoidRootPart then break end
+					if Humanoid and Humanoid.Parent then pcall(function() Humanoid:ChangeState(Physics) end) end
 
 					local Target = Table.Target
-
 					local Timeout = Time + OptionsFlingTimeout
 					local LastPosition = Target.Position
 
 					while Target and HumanoidRootPart do
-						if Time > Timeout then
-							break
-						end
-
+						if Time > Timeout then break end
 						local Position = Target.Position
-						local LinearVelocity = ( Position - LastPosition ) / DeltaTime
+						local LinearVelocity = (Position - LastPosition) / DeltaTime
 
-						if LinearVelocity.Magnitude > 50 then
-							break
-						end
-
+						if LinearVelocity.Magnitude > 50 then break end
 						LastPosition = Position
 
 						HumanoidRootPart.AssemblyAngularVelocity = OptionsFlingVelocity
 						HumanoidRootPart.AssemblyLinearVelocity = OptionsFlingVelocity
-					
-						HumanoidRootPart.CFrame = Target.CFrame * CFramenew(0, 0, 4 * mathsin(Time * 30)) * CFrameAngles(mathrandom(-360, 360), mathrandom(-360, 360), mathrandom(-360, 360)) + ( LinearVelocity * 0.5) 
+						HumanoidRootPart.CFrame = Target.CFrame * CFramenew(0, 0, 4 * mathsin(Time * 30)) * CFrameAngles(mathrandom(-360, 360), mathrandom(-360, 360), mathrandom(-360, 360)) + (LinearVelocity * 0.5) 
 						taskwait()
 					end
 
 					local Highlight = Table.Highlight
-
-					if Highlight then
-						Destroy(Highlight)
-					end
-
+					if Highlight then Destroy(Highlight) end
 					Targets[Index] = nil
 				end
 
-				if Humanoid and Humanoid.Parent then
-					pcall(function() ChangeState(Humanoid, Running) end)
-				end
+				if Humanoid and Humanoid.Parent then pcall(function() Humanoid:ChangeState(Running) end) end
 
 				if RigHumanoidRootPart then
 					HumanoidRootPart.AssemblyAngularVelocity = Vector3zero
 					HumanoidRootPart.AssemblyLinearVelocity = Vector3zero
-
-					HumanoidRootPart.CFrame = RigHumanoidRootPart.CFrame + Vector3new(mathrandom(- OptionsTeleportXandZoffset, OptionsTeleportXandZoffset), OptionsTeleportYoffset, mathrandom(- OptionsTeleportXandZoffset, OptionsTeleportXandZoffset))
+					HumanoidRootPart.CFrame = RigHumanoidRootPart.CFrame * CFramenew(0, -18, 0)
 				end
 			end
 			
-			taskwait(0.26 + Wait(PreSimulation))
-
-			if Character then
-				BreakJoints(Character)
-			end
+			taskwait(0.2)
+			if Character then BreakJoints(Character) end
 		end
 	end
 
 	--====================================================
-	-- Runtime hooks
+	-- RUNTIME HOOKS & VOID / HIDING MONITORING
 	--====================================================
+	local function PreRenderConnect()
+		-- ÉP TÀNG HÌNH RIG MULTIPLIERGUY TRONG MỖI FRAME HIỂN THỊ
+		if Rig then
+			FullyHideRig(Rig)
+		end
+	end
 
 	local function PostSimulationConnect()
-		sethiddenproperty(LocalPlayer, "SimulationRadius", 2147483647)
+		pcall(sethiddenproperty, LocalPlayer, "SimulationRadius", 2147483647)
 
 		Time = osclock()
-		DeltaTime = Time - LastTime
+		DeltaTime = Time - (LastTime or Time)
 		LastTime = Time
 
-		local Integer = 29 + mathsin(Time)
-		local Vector3 = Vector3new(0, 0, 0.002 * mathsin(Time * 25))
+		-- AUTO-FIX DETECTION
+		if OptionsAutoFix and not IsFixingChar then
+			if not Rig or not Rig.Parent or not Rig:IsDescendantOf(Workspace) then
+				TriggerAutoFix("Rig Bị Unparent Hoặc Xóa")
+				return
+			end
+			if not RigHumanoidRootPart or not RigHumanoidRootPart.Parent then
+				TriggerAutoFix("Rig HumanoidRootPart Bị Mất")
+				return
+			end
+			if RigHumanoid and RigHumanoid.Health <= 0 then
+				TriggerAutoFix("Rig Humanoid Bị Chết")
+				return
+			end
+		end
 
-		for Index, Table in pairs(Tables) do
+		local Integer = 25.05
+		local Vector3Offset = Vector3new(0, 0, 0.002 * mathsin(Time * 25))
+
+		for _, Table in pairs(Tables) do
 			local Part0 = Table.Part0
 			local Part1 = Table.Part1
 
 			if IsValidPart(Part0) and IsValidPart(Part1) and not HasJoint(Part0) and Part0.ReceiveAge <= 0.1 then
 				Part0.AssemblyAngularVelocity = Vector3zero
-
 				local Position = Part1.Position
-				local LinearVelocity = ( ( Table.LastPosition - Position ) / DeltaTime ) * Integer
+				local LinearVelocity = ((Table.LastPosition - Position) / DeltaTime) * Integer
 				Table.LastPosition = Position
 
 				Part0.AssemblyLinearVelocity = Vector3new(LinearVelocity.X, Integer, LinearVelocity.Z)
-
-				Part0.CFrame = Part1.CFrame * ( Table.CFrame or CFrameidentity ) + Vector3
+				Part0.CFrame = Part1.CFrame * (Table.CFrame or CFrameidentity) + Vector3Offset
 			end
 		end
-		
-		local Hit = Mouse.Hit
-		local Holding = IsMouseButtonPressed(UserInputService, MouseButton1)
+
+		local Hit = Mouse and Mouse.Hit
+		local Holding = UserInputService and IsMouseButtonPressed(UserInputService, MouseButton1)
 		
 		for Tool, BasePart in pairs(Tools) do
 			if IsValidPart(BasePart) and BasePart.ReceiveAge <= 0.1 and not HasJoint(BasePart) then
@@ -675,7 +602,7 @@ function Reanimate()
 				BasePart.AssemblyAngularVelocity = OptionsFlingVelocity
 				BasePart.AssemblyLinearVelocity = OptionsFlingVelocity
 				
-				if Holding then
+				if Holding and Hit then
 					BasePart.CFrame = Hit
 				elseif RigHumanoidRootPart then
 					BasePart.CFrame = RigHumanoidRootPart.CFrame * CFramenew(0, OptionsTeleportYoffset, 0) * CFrameAngles(mathrandom(-360, 360), mathrandom(-360, 360), mathrandom(-360, 360))
@@ -685,24 +612,36 @@ function Reanimate()
 			end
 		end
 
-		-- ĐỒNG BỘ NÚT ĐIỀU KHIỂN VỚI CHECK BẢO VỆ
 		if RigHumanoid and RigHumanoid.Parent and Humanoid and Humanoid.Parent then
 			pcall(function()
 				RigHumanoid.Jump = Humanoid.Jump
-				Move(RigHumanoid, Humanoid.MoveDirection)
+				RigHumanoid:Move(Humanoid.MoveDirection)
 			end)
 		end
-		
-		-- HỆ THỐNG BẢO VỆ VÀ ẨN THÂN (ANTIVOID, ANTIFLING, HIDE REAL CHARACTER) --
+
+		--====================================================
+		-- CHỈ KHI RƠI XUỐNG VOID (Y < -100): SPAWN LẠI TẠI SPAWNLOCATION
+		--====================================================
 		if RigHumanoidRootPart then
-			local SafeVoidY = (Workspace.FallenPartsDestroyHeight or -500) + 45
-			
-			if RigHumanoidRootPart.Position.Y < (SafeVoidY - 20) then
-				RigHumanoidRootPart.CFrame = RigHumanoidRootPart.CFrame + Vector3new(0, 150, 0)
+			if RigHumanoidRootPart.Position.Y < -100 then
+				local SpawnCFrame = GetSpawnCFrame()
+				RigHumanoidRootPart.CFrame = SpawnCFrame
 				RigHumanoidRootPart.AssemblyLinearVelocity = Vector3zero
 				RigHumanoidRootPart.AssemblyAngularVelocity = Vector3zero
+				
+				-- CĂN CHỈNH LẠI NHÂN VẬT THẬT VÀ TỰ ĐỘNG KHÔI PHỤC VỊ TRÍ HAT
+				local RealChar = LocalPlayer.Character
+				if RealChar and RealChar ~= Rig then
+					local RealHRP = FindFirstChildOfClassAndName(RealChar, "BasePart", "HumanoidRootPart")
+					if RealHRP then
+						RealHRP.CFrame = SpawnCFrame * CFramenew(0, -18, 0)
+						RealHRP.AssemblyLinearVelocity = Vector3new(0, 25.05, 0)
+						RealHRP.AssemblyAngularVelocity = Vector3zero
+					end
+				end
 			end
-			
+
+			-- BẢO VỆ CHỐNG RƠI QUÁ VẬN TỐC CHO RIG
 			if Rig then
 				for _, Part in pairs(GetDescendants(Rig)) do
 					if IsA(Part, "BasePart") then
@@ -717,9 +656,9 @@ function Reanimate()
 			local RealChar = LocalPlayer.Character
 			if RealChar and RealChar ~= Rig then
 				local RealHRP = FindFirstChildOfClassAndName(RealChar, "BasePart", "HumanoidRootPart")
-				if RealHRP then
-					RealHRP.CFrame = CFramenew(0, SafeVoidY, 0)
-					RealHRP.AssemblyLinearVelocity = Vector3zero
+				if RealHRP and RealHRP.Position.Y >= -100 then
+					RealHRP.CFrame = RigHumanoidRootPart.CFrame * CFramenew(0, -18, 0)
+					RealHRP.AssemblyLinearVelocity = Vector3new(0, 25.05, 0)
 					RealHRP.AssemblyAngularVelocity = Vector3zero
 				end
 				
@@ -731,41 +670,27 @@ function Reanimate()
 						end
 						
 						if not HasJoint(BPart) then
-							BPart.CFrame = CFramenew(0, SafeVoidY, 0)
-							BPart.AssemblyLinearVelocity = Vector3zero
+							BPart.CFrame = RigHumanoidRootPart.CFrame * CFramenew(0, -18, 0)
+							BPart.AssemblyLinearVelocity = Vector3new(0, 25.05, 0)
 							BPart.AssemblyAngularVelocity = Vector3zero
 						end
 					end
 				end
 			end
 		end
-
-		if not Success then
-			Success = pcall(SetCore, StarterGui, "ResetButtonCallback", BindableEvent)
-		else
-			SetCore(StarterGui, "ResetButtonCallback", BindableEvent)
-		end
 	end
 
 	local function PreSimulationConnect()
-		for Index, BasePart in pairs(BaseParts) do
-			BasePart.CanCollide = false
-		end
-		
+		for _, BasePart in pairs(BaseParts) do BasePart.CanCollide = false end
 		if Rig then
 			for _, Part in pairs(GetDescendants(Rig)) do
-				if IsA(Part, "BasePart") then
-					Part.CanCollide = false
-				end
+				if IsA(Part, "BasePart") then Part.CanCollide = false end
 			end
 		end
-		
 		for _, Player in pairs(GetChildren(Players)) do
 			if Player ~= LocalPlayer and Player.Character then
 				for _, Part in pairs(GetDescendants(Player.Character)) do
-					if IsA(Part, "BasePart") then
-						Part.CanCollide = false
-					end
+					if IsA(Part, "BasePart") then Part.CanCollide = false end
 				end
 			end
 		end
@@ -773,52 +698,36 @@ function Reanimate()
 
 	local function Fling(Target)
 		if typeof(Target) == "Instance" then
-			if IsA(Target, "Humanoid") then
-				Target = Target.Parent
-			end
-			if IsA(Target.Parent, "Accessory") then
-				Target = FindFirstAncestorOfClass(Target, "Model")
-			end
-			if IsA(Target, "Model") then
-				Target = FindFirstChildOfClassAndName(Target, "BasePart", "HumanoidRootPart")
-			end
+			if IsA(Target, "Humanoid") then Target = Target.Parent end
+			if IsA(Target.Parent, "Accessory") then Target = FindFirstAncestorOfClass(Target, "Model") end
+			if IsA(Target, "Model") then Target = FindFirstChildOfClassAndName(Target, "BasePart", "HumanoidRootPart") end
 			if IsA(Target, "BasePart") then
-				for Index, Table in pairs(Targets) do
-					if Table.Target == Target then
-						return
-					end
+				for _, Table in pairs(Targets) do
+					if Table.Target == Target then return end
 				end
 
 				local Parent = Target.Parent
 				local Highlight = nil
-				
 				if OptionsFlingHighlightTargets then
 					Highlight = Instancenew("Highlight")
 					Highlight.Adornee = Parent
 					Highlight.Parent = Parent
 					tableinsert(Highlights, Highlight)
 				end
-				
 				tableinsert(Targets, {Highlight = Highlight, Target = Target})
 			end
 		end
 	end
 
 	local function InputBegan(InputObject)
-		local UserInputType = InputObject.UserInputType
-
-		if UserInputType == MouseButton1 or UserInputType == Touch then
-			local Target = Mouse.Target
-
+		local UserInputTypeVal = InputObject.UserInputType
+		if UserInputTypeVal == MouseButton1 or UserInputTypeVal == Touch then
+			local Target = Mouse and Mouse.Target
 			if Target and not Target.Anchored then
 				local Model = Target.Parent
-
 				if IsA(Model, "Model") and FindFirstChildOfClass(Model, "Humanoid") then
 					local HumanoidRootPart = FindFirstChildOfClassAndName(Model, "BasePart", "HumanoidRootPart")
-
-					if HumanoidRootPart then
-						Fling(HumanoidRootPart)
-					end
+					if HumanoidRootPart then Fling(HumanoidRootPart) end
 				else
 					Fling(Target)
 				end
@@ -826,27 +735,11 @@ function Reanimate()
 		end
 	end
 
-	local function gameDescendantAdded(Instance)
-		if (OptionsDisableScreenGUIs and IsA(Instance, "ScreenGui")) or (OptionsDisableScripts and Instance ~= script and (IsA(Instance, "LocalScript") or IsA(Instance, "Script"))) then
-			Enableds[Instance] = Instance.Enabled
-			Instance.Enabled = false
-
-			tableinsert(RBXScriptConnections, Connect(GetPropertyChangedSignal(Instance, "Enabled"), function()
-				Enableds[Instance] = Instance.Enabled
-				Instance.Enabled = false
-			end))
-		end
-	end
-
-	local function Stop()
-		for Index, RBXScriptConnection in pairs(RBXScriptConnections) do
-			Disconnect(RBXScriptConnection)
-		end
-		for Index, Highlight in pairs(Highlights) do
-			Destroy(Highlight)
-		end
-		for Instance, Boolean in pairs(Enableds) do
-			Instance.Enabled = Boolean
+	Stop = function()
+		for _, RBXScriptConnection in pairs(RBXScriptConnections) do Disconnect(RBXScriptConnection) end
+		for _, Highlight in pairs(Highlights) do Destroy(Highlight) end
+		for Instance, BooleanVal in pairs(Enableds) do 
+			pcall(function() Instance.Enabled = BooleanVal end)
 		end
 
 		tableclear(Attachments)
@@ -857,34 +750,29 @@ function Reanimate()
 		tableclear(Tables)
 		tableclear(Targets)
 
-		if Rig then
-			Destroy(Rig)
-		end
-
-		Destroy(BindableEvent)
-		SetCore(StarterGui, "ResetButtonCallback", true)
+		if Rig then Destroy(Rig) end
+		if BindableEvent then Destroy(BindableEvent) end
 		genv._EMP_REANIMATE_RUNNING = nil
 	end
 
 	--====================================================
-	-- Main controller
+	-- MAIN CONTROLLER
 	--====================================================
-
 	local Emperean = {
 		Stop = Stop,
 		Start = function(Options)
 			Options = Options or { }
 			OptionsAccessories = Options.Accessories or {}
-			local OptionsRig = Options.Rig
-			OptionsRigTransparency = OptionsRig.Transparency
+			local OptionsRig = Options.Rig or {}
+			OptionsRigTransparency = 1
 			OptionsRigR15 = OptionsRig.R15
 			OptionsRigSetHumanoidDescription = OptionsRig.SetHumanoidDescription
 			OptionsRigSetCharacter = OptionsRig.SetCharacter
 			local OptionsTeleport = Options.Teleport or {}
 			local XandZoffset = OptionsTeleport.XandZoffset
-			OptionsTeleportXandZoffset = XandZoffset and mathabs(XandZoffset) or 6
+			OptionsTeleportXandZoffset = XandZoffset and mathabs(XandZoffset) or 0
 			OptionsTeleportYoffset = OptionsTeleport.Yoffset or 0
-			local OptionsDisable = Options.Disable
+			local OptionsDisable = Options.Disable or {}
 			OptionsDisableScripts = OptionsDisable.Scripts
 			OptionsDisableScreenGUIs = OptionsDisable.GUIs
 			local OptionsFling = Options.Fling or {}
@@ -893,74 +781,83 @@ function Reanimate()
 			OptionsFlingTimeout = OptionsFling.Timeout or 1.5
 			OptionsFlingVelocity = OptionsFling.Velocity or Vector3new(0, 4096, 0)
 			OptionsFlingHighlightTargets = OptionsFling.HighlightTargets
+			OptionsAutoFix = (Options.AutoFix == nil and true) or Options.AutoFix
 
 			if OptionsDisableScripts or OptionsDisableScreenGUIs then
-				for Index, Instance in pairs(GetDescendants(game)) do
-					gameDescendantAdded(Instance)
-				end
-
 				tableinsert(RBXScriptConnections, Connect(game.DescendantAdded, gameDescendantAdded))
 			end
 
 			Boolean = true
 			LastTime = osclock()
 
-			-- Khởi tạo UI Fix Character cố định
-			CreateFixCharUI()
+			Rig = SafeCreateRig(OptionsRigR15)
+			if not Rig then
+				genv._EMP_REANIMATE_RUNNING = nil
+				warn("[REANIMATE]: Không thể tạo Rig Client!")
+				return
+			end
 
-			Rig = OptionsRigR15 and CreateHumanoidModelFromUserId(Players, 5532894300) or CreateHumanoidModelFromUserId(Players, 5532891747)
-			Rig.Name = "Multiplierguy"
+			Rig.Name = "non"
 			RigHumanoidRootPart = Rig:FindFirstChild("HumanoidRootPart") or Rig:FindFirstChildOfClass("BasePart")
+			
+			if RigHumanoidRootPart then RigHumanoidRootPart.CFrame = GetSpawnCFrame() end
 			Rig.Parent = Workspace
 
-			-- BẢO VỆ HUMANOID CỦA RIG NẾU BỊ XOÁ
+			-- TÀNG HÌNH TOÀN BỘ CÁC CẤU TRÚC RIG MULTIPLIERGUY NGAY KHI SPANW
+			FullyHideRig(Rig)
+			tableinsert(RBXScriptConnections, Connect(Rig.DescendantAdded, ForceHideInstance))
+
 			AutoGuardHumanoid(Rig, "Rig")
 
-			for Index, Instance in pairs(GetDescendants(Rig)) do
-				if IsA(Instance, "Attachment") then
-					Attachments[Instance.Name] = Instance
-				else
-					Invisible(Instance)
+			if RigHumanoid then
+				tableinsert(RBXScriptConnections, Connect(RigHumanoid.Died, function()
+					TriggerAutoFix("Rig Humanoid Died Event")
+				end))
+			end
+
+			tableinsert(RBXScriptConnections, Connect(Rig.AncestryChanged, function(_, parent)
+				if not parent then
+					TriggerAutoFix("Rig Ancestry Changed To Nil")
 				end
+			end))
+
+			for _, Instance in pairs(GetDescendants(Rig)) do
+				if IsA(Instance, "Attachment") then Attachments[Instance.Name] = Instance
+				else Invisible(Instance) end
 			end
 
 			BindableEvent = Instancenew("BindableEvent")
 			Connect(BindableEvent.Event, Stop)
 
 			tableinsert(RBXScriptConnections, Connect(GetPropertyChangedSignal(Workspace, "CurrentCamera"), Camera))
-
 			CharacterAdded()
 			tableinsert(RBXScriptConnections, Connect(LocalPlayer.CharacterAdded, CharacterAdded))
 
-			if OptionsFlingEnabled then
+			if OptionsFlingEnabled and UserInputService then
 				tableinsert(RBXScriptConnections, Connect(UserInputService.InputBegan, InputBegan))
 			end
 
+			tableinsert(RBXScriptConnections, Connect(PreRender, PreRenderConnect))
 			tableinsert(RBXScriptConnections, Connect(PreSimulation, PreSimulationConnect))
 			tableinsert(RBXScriptConnections, Connect(PostSimulation, PostSimulationConnect))
 
-			return { 
-				Rig = Rig,
-				Options = Options,
-				Fling = Fling,
-			},
-			taskwait()
+			return { Rig = Rig, Options = Options, Fling = Fling }, taskwait()
 		end,
 	}
 
 	Emperean.Start({
+		AutoFix = true,
 		Accessories = {
-			-- Free Rig
 			{ Blacklist = true, Name = "Torso", AlternativeName = "UpperTorso", MeshId = "4819720316", TextureId = "4819722776", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(0, 0, -0.25), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Right Arm", AlternativeName = "RightLowerArm", MeshId = "3030546036", TextureId = "3360974849", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(-1.57, 0, -1.57), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Left Arm", AlternativeName = "LeftLowerArm", MeshId = "3030546036", TextureId = "3360978739", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(-1.57, 0, 1.57), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Right Leg", AlternativeName = "RightLowerLeg", MeshId = "3030546036", TextureId = "3033898741", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(-1.57, 0, -1.57), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Left Leg", AlternativeName = "LeftLowerLeg", MeshId = "3030546036", TextureId = "3409604993", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(-1.57, 0, 1.57), AlternativeCFrame = CFrameidentity },
-		
+
 			-- Cheap Paid Rig
-			{ Blacklist = true, Name = "Right Arm", AlternativeName = "RightLowerArm", MeshId = "12344206657", TextureId = "12344206675", AllowAlternativeCFrame = false, CoordinateFrame = CFramenew(-0.095, 0, 0) * CFrameAngles(-2, 0, 0), AlternativeCFrame = CFrameidentity },
-			{ Blacklist = true, Name = "Left Arm", AlternativeName = "LeftLowerArm", MeshId = "12344207333", TextureId = "12344207341", AllowAlternativeCFrame = false, CoordinateFrame = CFramenew(0.095, 0, 0) * CFrameAngles(-2, 0, 0), AlternativeCFrame = CFrameidentity },
-			{ Blacklist = true, Name = "Right Leg", AlternativeName = "RightLowerLeg", MeshId = "11263221350", TextureId = "11263219250", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(1.57, - 1.57, 0), AlternativeCFrame = CFrameidentity },
+			{ Blacklist = true, Name = "Right Arm", AlternativeName = "RightLowerArm", MeshId = "12344206657", TextureId = "12344206675", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(-2, 0, 0), AlternativeCFrame = CFrameidentity },
+			{ Blacklist = true, Name = "Left Arm", AlternativeName = "LeftLowerArm", MeshId = "12344207333", TextureId = "12344207341", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(-2, 0, 0), AlternativeCFrame = CFrameidentity },
+			{ Blacklist = true, Name = "Right Leg", AlternativeName = "RightLowerLeg", MeshId = "11263221350", TextureId = "11263219250", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(1.57, -1.57, 0), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Left Leg", AlternativeName = "LeftLowerLeg", MeshId = "11159370334", TextureId = "11159284657", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(1.57, 1.57, 0), AlternativeCFrame = CFrameidentity },
 	 
 			-- Accurate Paid Rig
@@ -970,18 +867,18 @@ function Reanimate()
 			{ Blacklist = true, Name = "Right Leg", AlternativeName = "RightLowerLeg", MeshId = "17374767929", TextureId = "17374768001", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(0, 1.57, 1.57), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Left Leg", AlternativeName = "LeftLowerLeg", MeshId = "17374767929", TextureId = "17374768001", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(0, 1.57, 1.57), AlternativeCFrame = CFrameidentity },
 
-			-- White legs below
+			-- White legs
 			{ Blacklist = true, Name = "Left Leg", AlternativeName = "LeftLowerArm", MeshId = "14768684979", TextureId = "14768683674", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(0, 1.57, 1.57), AlternativeCFrame = CFrameidentity },
 			{ Blacklist = true, Name = "Right Leg", AlternativeName = "LeftLowerArm", MeshId = "14768684979", TextureId = "14768683674", AllowAlternativeCFrame = false, CoordinateFrame = CFrameAngles(0, 1.57, 1.57), AlternativeCFrame = CFrameidentity },
 		},
 		Rig = {
 			Transparency = 1,
 			R15 = false,
-			SetHumanoidDescription = true,
+			SetHumanoidDescription = false,
 			SetCharacter = false
 		},
 		Teleport = {
-			XandZoffset = 145,
+			XandZoffset = 0,
 			Yoffset = 0
 		},
 		Disable = {
